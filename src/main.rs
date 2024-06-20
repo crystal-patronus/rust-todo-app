@@ -65,10 +65,10 @@ fn edit_task(task_update: Json<TaskUpdate<'_>>) -> &'static str {
                         .expect("unable to access tasks.txt");
     let mut temp = OpenOptions::new()
                         .create(true)
-                        .append(true)
+                        .write(true)
                         .truncate(true)
                         .open("temp.txt")
-                        .expect("unable to access tasks.txt");
+                        .expect("unable to access temp.txt");
     
     let reader = BufReader::new(tasks);
     for line in reader.lines() {
