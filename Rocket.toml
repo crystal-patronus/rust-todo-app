@@ -1,0 +1,2 @@
+[default.databases.todo]
+url = "postgres://postgres:root@localhost:5432/rust_todo_app"
