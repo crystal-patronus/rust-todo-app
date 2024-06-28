@@ -1,22 +1,18 @@
 #[macro_use] extern crate rocket;
 
+use std::{fs::OpenOptions, io::{ BufReader, BufRead, Write }};
 use rocket::serde::{json::Json, Deserialize, Serialize};
-use rocket::response::{Responder, Result as ResponseResult};
-use rocket::Request;
-use rocket_db_pools::{Connection, Database};
-use rocket::http::Status;
-use sqlx::{self};
 
-#[derive(Deserialize, Serialize, sqlx::FromRow)]
+#[derive(Deserialize, Serialize)]
 #[serde(crate = "rocket::serde")]
-struct Task {
-    id: i64,
-    item: String
+struct Task<'r> {
+    item: &'r str
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(crate = "rocket::serde")]
-struct TaskItem<'r> {
+struct TaskUpdate<'r> {
+    id: u8,
     item: &'r str
 }
 
@@ -26,38 +22,108 @@ struct TaskId {
     id: i64
 }
 
-#[derive(Database)]
-#[database("todo")]
-struct TodoDatabase(rocket_db_pools::sqlx::PgPool);
-
-struct DatabaseError(rocket_db_pools::sqlx::Error);
-
-impl<'r> Responder<'r, 'r> for DatabaseError {
-    fn respond_to(self, _: &Request<'_>) -> ResponseResult<'r> {
-        Err(Status::InternalServerError)
-    }
-}
-
-impl From<rocket_db_pools::sqlx::Error> for DatabaseError {
-    fn from(error: rocket_db_pools::sqlx::Error) -> Self {
-        DatabaseError(error)
-    }
-}
-
 #[get("/")]
 fn index() -> &'static str {
     "hello, world!"
 }
 
-#[allow(unused)]
-#[post("/addtask", data="<task>")]
-async fn add_task(task: Json<TaskItem<'_>>, mut db: Connection<TodoDatabase>) -> Result<Json<Task>, DatabaseError> {
-    let added_task = sqlx::query_as::<_, Task>("INSERT INTO tasks (item) VALUES ($1) RETURNING *")
-        .bind(task.item)
-        .fetch_one(&mut **db)
-        .await?;
+#[get("/readtasks")]
+fn read_task() -> Json<Vec<String>> {
+    let tasks = OpenOptions::new()
+                    .read(true)
+                    .append(true)
+                    .create(true)
+                    .open("tasks.txt")
+                    .expect("unable to access tasks.txt");
+    let reader = BufReader::new(tasks);
+    Json(reader.lines()
+            .map(|line| {
+                let line_string: String = line.expect("could not read line");
+                let line_pieces: Vec<&str> = line_string.split(",").collect();
+                line_pieces[1].to_string()
+            })
+            .collect())
+}
 
-    Ok(Json(added_task))
+#[post("/addtask", data="<task>")]
+fn add_task(task: Json<Task<'_>>) -> &'static str {
+    let mut tasks = OpenOptions::new()
+                        .read(true)
+                        .append(true)
+                        .create(true)
+                        .open("tasks.txt")
+                        .expect("unable to access tasks.txt");
+    let reader = BufReader::new(&tasks);
+    let id = reader.lines().count();
+    let task_item_string = format!("{},{}\n", id, task.item);
+    let task_item_bytes = task_item_string.as_bytes();
+    tasks.write(task_item_bytes).expect("unable to write to tasks.txt");
+    "Task added successfully"
+}
+
+#[put("/edittask", data="<task_update>")]
+fn edit_task(task_update: Json<TaskUpdate<'_>>) -> &'static str {
+    let tasks = OpenOptions::new()
+                        .read(true)
+                        .append(true)
+                        .create(true)
+                        .open("tasks.txt")
+                        .expect("unable to access tasks.txt");
+    let mut temp = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open("temp.txt")
+                        .expect("unable to access temp.txt");
+    
+    let reader = BufReader::new(tasks);
+    for line in reader.lines() {
+        let line_string: String = line.expect("could not read line");
+        let line_pieces: Vec<&str> = line_string.split(",").collect();
+        if line_pieces[0].parse::<u8>().expect("unable to parse id as u8") == task_update.id {
+            let task_items: [&str; 2] = [line_pieces[0], task_update.item];
+            let task = format!("{}\n", task_items.join(","));
+            temp.write(task.as_bytes()).expect("could not write to temp file");
+        }
+        else {
+            let task = format!("{}\n", line_string);
+            temp.write(task.as_bytes()).expect("could not write to temp file");
+        }
+    }
+
+    std::fs::remove_file("tasks.txt").expect("unable to remove tasks.txt");
+    std::fs::rename("temp.txt", "tasks.txt").expect("unable to renmae temp.txt");
+    "Task updated successfully"
+}
+
+#[delete("/deletetask", data="<task_id>")]
+fn delte_task(task_id: Json<TaskId>) -> &'static str {
+    let tasks = OpenOptions::new()
+                        .read(true)
+                        .append(true)
+                        .create(true)
+                        .open("tasks.txt")
+                        .expect("unable to access tasks.txt");
+    let mut temp = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open("temp.txt")
+                        .expect("unable to access temp.txt");
+                    let reader = BufReader::new(tasks);
+
+    for line in reader.lines() {
+        let line_string: String = line.expect("could not read line");
+        let line_pieces: Vec<&str> = line_string.split(",").collect();
+        if line_pieces[0].parse::<u8>().expect("unable to parse id as u8") != task_id.id {
+            let task = format!("{}\n", line_string);
+            temp.write(task.as_bytes()).expect("could not write to temp file");
+        }
+    }
+
+    std::fs::remove_file("tasks.txt").expect("unable to remove tasks.txt");
+    std::fs::rename("temp.txt", "tasks.txt").expect("unable to renmae temp.txt");
+    "Task deleted successfully"
 }
 
 #[get("/readtasks")]
@@ -95,4 +161,5 @@ fn rocket() -> _ {
     rocket::build()
         .attach(TodoDatabase::init())
         .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task])
+
 }
