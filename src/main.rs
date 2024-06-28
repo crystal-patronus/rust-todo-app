@@ -2,9 +2,9 @@
 
 use rocket::serde::{json::Json, Deserialize, Serialize};
 use rocket::response::{Responder, Result as ResponseResult};
-use rocket::Request;
 use rocket_db_pools::{Connection, Database};
 use rocket::http::Status;
+use rocket::Request;
 use sqlx::{self};
 
 #[derive(Deserialize, Serialize, sqlx::FromRow)]
