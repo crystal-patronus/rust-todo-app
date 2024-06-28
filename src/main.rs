@@ -23,7 +23,7 @@ struct TaskItem<'r> {
 #[derive(Deserialize, Serialize)]
 #[serde(crate = "rocket::serde")]
 struct TaskId {
-    id: u8
+    id: i64
 }
 
 #[derive(Database)]
@@ -69,7 +69,7 @@ async fn read_tasks(mut db: Connection<TodoDatabase>) -> Result<Json<Vec<Task>>,
     Ok(Json(all_tasks))
 }
 
-#[get("/edittask", data="<task_update>")]
+#[put("/edittask", data="<task_update>")]
 async fn edit_task(task_update: Json<Task>, mut db: Connection<TodoDatabase>) -> Result<Json<Task>, DatabaseError> {
     let updated_task = sqlx::query_as::<_, Task>("UPDATE tasks SET item = $1 WHERE id = $2 RETURNING *")
         .bind(&task_update.item)
@@ -80,9 +80,19 @@ async fn edit_task(task_update: Json<Task>, mut db: Connection<TodoDatabase>) ->
     Ok(Json(updated_task))
 }
 
+#[delete("/deletetask", data="<task_id>")]
+async fn delete_task(task_id: Json<TaskId>, mut db: Connection<TodoDatabase>) -> Result<Json<Task>, DatabaseError> {
+    let deleted_task = sqlx::query_as::<_, Task>("DELETE FROM tasks WHERE id = $1 RETURNING *")
+        .bind(task_id.id)
+        .fetch_one(&mut **db)
+        .await?;
+
+    Ok(Json(deleted_task))
+}
+
 #[launch]
 fn rocket() -> _ {
     rocket::build()
         .attach(TodoDatabase::init())
-        .mount("/", routes![index, add_task, read_tasks, edit_task])
+        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task])
 }
