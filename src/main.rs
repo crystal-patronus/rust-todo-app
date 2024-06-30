@@ -1,36 +1,25 @@
 #[macro_use] extern crate rocket;
 
-use rocket::serde::{json::Json, Deserialize, Serialize};
-use rocket::response::{Responder, Result as ResponseResult};
-use rocket_db_pools::{Connection, Database};
-use rocket::http::Status;
-use rocket::Request;
-use sqlx::{self};
+mod pool;
 
-#[derive(Deserialize, Serialize, sqlx::FromRow)]
-#[serde(crate = "rocket::serde")]
-struct Task {
-    id: i64,
-    item: String
-}
+use migration::MigratorTrait;
+use entity::tasks;
 
-#[derive(Deserialize, Serialize)]
-#[serde(crate = "rocket::serde")]
-struct TaskItem<'r> {
-    item: &'r str
-}
+use pool::Db;
+use rocket::{
+    response::{Responder, Result as ResponseResult},
+    fairing::{AdHoc, self},
+    serde::json::Json,
+    http::Status,
+    form::Form,
+    Request,
+    Rocket,
+    Build
+};
+use sea_orm::{ActiveModelTrait, Set}; //, EntityTrait, QueryOrder, DeleteResult};
+use sea_orm_rocket::{Connection, Database};
 
-#[derive(Deserialize, Serialize)]
-#[serde(crate = "rocket::serde")]
-struct TaskId {
-    id: i64
-}
-
-#[derive(Database)]
-#[database("todo")]
-struct TodoDatabase(rocket_db_pools::sqlx::PgPool);
-
-struct DatabaseError(rocket_db_pools::sqlx::Error);
+struct DatabaseError(sea_orm::DbErr);
 
 impl<'r> Responder<'r, 'r> for DatabaseError {
     fn respond_to(self, _: &Request<'_>) -> ResponseResult<'r> {
@@ -38,61 +27,41 @@ impl<'r> Responder<'r, 'r> for DatabaseError {
     }
 }
 
-impl From<rocket_db_pools::sqlx::Error> for DatabaseError {
-    fn from(error: rocket_db_pools::sqlx::Error) -> Self {
+impl From<sea_orm::DbErr> for DatabaseError {
+    fn from(error: sea_orm::DbErr) -> Self {
         DatabaseError(error)
     }
 }
+
 
 #[get("/")]
 fn index() -> &'static str {
     "hello, world!"
 }
 
-#[allow(unused)]
-#[post("/addtask", data="<task>")]
-async fn add_task(task: Json<TaskItem<'_>>, mut db: Connection<TodoDatabase>) -> Result<Json<Task>, DatabaseError> {
-    let added_task = sqlx::query_as::<_, Task>("INSERT INTO tasks (item) VALUES ($1) RETURNING *")
-        .bind(task.item)
-        .fetch_one(&mut **db)
-        .await?;
+#[post("/addtask", data="<task_form>")]
+async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Result<Json<tasks::Model>, DatabaseError> {
+    let db = conn.into_inner();
+    let task = task_form.into_inner();
 
-    Ok(Json(added_task))
+    let active_task: tasks::ActiveModel = tasks::ActiveModel {
+        item: Set(task.item),
+        ..Default::default()
+    };
+
+    Ok(Json(active_task.insert(db).await?))
 }
 
-#[get("/readtasks")]
-async fn read_tasks(mut db: Connection<TodoDatabase>) -> Result<Json<Vec<Task>>, DatabaseError> {
-    let all_tasks = sqlx::query_as::<_, Task>("SELECT * FROM tasks")
-        .fetch_all(&mut **db)
-        .await?;
-
-    Ok(Json(all_tasks))
-}
-
-#[put("/edittask", data="<task_update>")]
-async fn edit_task(task_update: Json<Task>, mut db: Connection<TodoDatabase>) -> Result<Json<Task>, DatabaseError> {
-    let updated_task = sqlx::query_as::<_, Task>("UPDATE tasks SET item = $1 WHERE id = $2 RETURNING *")
-        .bind(&task_update.item)
-        .bind(task_update.id)
-        .fetch_one(&mut **db)
-        .await?;
-
-    Ok(Json(updated_task))
-}
-
-#[delete("/deletetask", data="<task_id>")]
-async fn delete_task(task_id: Json<TaskId>, mut db: Connection<TodoDatabase>) -> Result<Json<Task>, DatabaseError> {
-    let deleted_task = sqlx::query_as::<_, Task>("DELETE FROM tasks WHERE id = $1 RETURNING *")
-        .bind(task_id.id)
-        .fetch_one(&mut **db)
-        .await?;
-
-    Ok(Json(deleted_task))
+async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
+    let conn = &Db::fetch(&rocket).unwrap().conn;
+    let _ = migration::Migrator::up(conn, None).await;
+    Ok(rocket)
 }
 
 #[launch]
 fn rocket() -> _ {
     rocket::build()
-        .attach(TodoDatabase::init())
-        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task])
+        .attach(Db::init())
+        .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
+        .mount("/", routes![index, add_task])
 }

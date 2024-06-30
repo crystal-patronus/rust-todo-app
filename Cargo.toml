@@ -1,3 +1,4 @@
+workspace = { members = ["entity"] }
 [package]
 name = "todo-app"
 version = "0.1.0"
@@ -5,14 +6,30 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[dependencies]
+async-trait = { version = "0.1" }
+entity = { path = "entity" }
+migration = { path = "migration" }
+
 [dependencies.rocket]
 version = "0.5.0"
 features = ["json"]
 
-[dependencies.sqlx]
-version = "0.7.0"
-features = ["runtime-tokio", "tls-rustls", "macros", "migrate", "postgres"]
+# [dependencies.sqlx]
+# version = "0.7.0"
+# features = ["runtime-tokio", "tls-rustls", "macros", "migrate", "postgres"]
 
-[dependencies.rocket_db_pools]
-version = "0.1.0"
-features = ["sqlx_postgres"]
+# [dependencies.rocket_db_pools]
+# version = "0.1.0"
+# features = ["sqlx_postgres"]
+
+[dependencies.sea-orm-rocket]
+git = "https://github.com/SeaQL/sea-orm"
+
+[dependencies.sea-orm]
+version = "^0.8.0"
+features = [
+    "runtime-tokio-native-tls",
+    "sqlx-postgres",
+    "macros"
+]
