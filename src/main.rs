@@ -17,7 +17,7 @@ use rocket::{
     Rocket,
     Build
 };
-use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder}; // DeleteResult};
+use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder, DeleteResult};
 use sea_orm_rocket::{Connection, Database};
 
 struct DatabaseError(sea_orm::DbErr);
@@ -65,6 +65,14 @@ async fn read_tasks(conn: Connection<'_, Db>) -> Result<Json<Vec<tasks::Model>>,
     ))
 }
 
+#[delete("/deletetask/<id>")]
+async fn delete_task(conn: Connection<'_, Db>, id: i32) -> Result<String, DatabaseError> {
+    let db = conn.into_inner();
+    let result = Tasks::delete_by_id(id).exec(db).await?;
+
+    Ok(format!("{} task(s) deleted", result.rows_affected))
+}
+
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
     let conn = &Db::fetch(&rocket).unwrap().conn;
     let _ = migration::Migrator::up(conn, None).await;
@@ -76,5 +84,5 @@ fn rocket() -> _ {
     rocket::build()
         .attach(Db::init())
         .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
-        .mount("/", routes![index, add_task, read_tasks])
+        .mount("/", routes![index, add_task, read_tasks, delete_task])
 }
