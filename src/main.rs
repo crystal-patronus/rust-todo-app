@@ -4,6 +4,7 @@ mod pool;
 
 use migration::MigratorTrait;
 use entity::tasks;
+use entity::tasks::Entity as Tasks;
 
 use pool::Db;
 use rocket::{
@@ -16,7 +17,7 @@ use rocket::{
     Rocket,
     Build
 };
-use sea_orm::{ActiveModelTrait, Set}; //, EntityTrait, QueryOrder, DeleteResult};
+use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder}; // DeleteResult};
 use sea_orm_rocket::{Connection, Database};
 
 struct DatabaseError(sea_orm::DbErr);
@@ -52,6 +53,18 @@ async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Re
     Ok(Json(active_task.insert(db).await?))
 }
 
+#[get("/readtasks")]
+async fn read_tasks(conn: Connection<'_, Db>) -> Result<Json<Vec<tasks::Model>>, DatabaseError> {
+    let db = conn.into_inner();
+
+    Ok(Json(
+        Tasks::find()
+            .order_by_asc(tasks::Column::Id)
+            .all(db)
+            .await?
+    ))
+}
+
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
     let conn = &Db::fetch(&rocket).unwrap().conn;
     let _ = migration::Migrator::up(conn, None).await;
@@ -63,5 +76,5 @@ fn rocket() -> _ {
     rocket::build()
         .attach(Db::init())
         .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
-        .mount("/", routes![index, add_task])
+        .mount("/", routes![index, add_task, read_tasks])
 }
