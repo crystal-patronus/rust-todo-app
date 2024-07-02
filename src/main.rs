@@ -4,8 +4,9 @@ mod pool;
 
 use migration::MigratorTrait;
 use entity::tasks;
-
+use entity::tasks::Entity as Tasks;
 use pool::Db;
+
 use rocket::{
     response::{Responder, Result as ResponseResult},
     fairing::{AdHoc, self},
@@ -16,7 +17,7 @@ use rocket::{
     Rocket,
     Build
 };
-use sea_orm::{ActiveModelTrait, Set}; //, EntityTrait, QueryOrder, DeleteResult};
+use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder}; // DeleteResult
 use sea_orm_rocket::{Connection, Database};
 
 struct DatabaseError(sea_orm::DbErr);
@@ -52,6 +53,40 @@ async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Re
     Ok(Json(active_task.insert(db).await?))
 }
 
+#[get("/readtasks")]
+async fn read_tasks(conn: Connection<'_, Db>) -> Result<Json<Vec<tasks::Model>>, DatabaseError> {
+    let db = conn.into_inner();
+
+    Ok(Json(
+        Tasks::find()
+            .order_by_asc(tasks::Column::Id)
+            .all(db)
+            .await?
+    ))
+}
+
+#[put("/edittask", data="<task_form>")]
+async fn edit_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Result<Json<tasks::Model>, DatabaseError> {
+    let db = conn.into_inner();
+    let task = task_form.into_inner();
+
+    let task_to_update = Tasks::find_by_id(task.id).one(db).await?;
+    let mut task_to_update:tasks::ActiveModel = task_to_update.unwrap().into();
+    task_to_update.item = Set(task.item);
+
+    Ok(Json(
+        task_to_update.update(db).await?
+    ))
+}
+
+#[delete("/deletetask/<id>")]
+async fn delete_task(conn: Connection<'_, Db>, id: i32) -> Result<String, DatabaseError> {
+    let db = conn.into_inner();
+    let result = Tasks::delete_by_id(id).exec(db).await?;
+
+    Ok(format!("{} task(s) deleted", result.rows_affected))
+}
+
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
     let conn = &Db::fetch(&rocket).unwrap().conn;
     let _ = migration::Migrator::up(conn, None).await;
@@ -63,5 +98,5 @@ fn rocket() -> _ {
     rocket::build()
         .attach(Db::init())
         .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
-        .mount("/", routes![index, add_task])
+        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task])
 }
