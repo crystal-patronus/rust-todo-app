@@ -5,8 +5,8 @@ mod pool;
 use migration::MigratorTrait;
 use entity::tasks;
 use entity::tasks::Entity as Tasks;
-
 use pool::Db;
+
 use rocket::{
     response::{Responder, Result as ResponseResult},
     fairing::{AdHoc, self},
