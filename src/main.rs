@@ -17,7 +17,7 @@ use rocket::{
     Rocket,
     Build
 };
-use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder, DeleteResult};
+use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder}; // DeleteResult
 use sea_orm_rocket::{Connection, Database};
 
 struct DatabaseError(sea_orm::DbErr);
@@ -65,6 +65,20 @@ async fn read_tasks(conn: Connection<'_, Db>) -> Result<Json<Vec<tasks::Model>>,
     ))
 }
 
+#[put("/edittask", data="<task_form>")]
+async fn edit_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Result<Json<tasks::Model>, DatabaseError> {
+    let db = conn.into_inner();
+    let task = task_form.into_inner();
+
+    let task_to_update = Tasks::find_by_id(task.id).one(db).await?;
+    let mut task_to_update:tasks::ActiveModel = task_to_update.unwrap().into();
+    task_to_update.item = Set(task.item);
+
+    Ok(Json(
+        task_to_update.update(db).await?
+    ))
+}
+
 #[delete("/deletetask/<id>")]
 async fn delete_task(conn: Connection<'_, Db>, id: i32) -> Result<String, DatabaseError> {
     let db = conn.into_inner();
@@ -84,5 +98,5 @@ fn rocket() -> _ {
     rocket::build()
         .attach(Db::init())
         .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
-        .mount("/", routes![index, add_task, read_tasks, delete_task])
+        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task])
 }
