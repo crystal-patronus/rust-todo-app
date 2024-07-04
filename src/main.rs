@@ -2,7 +2,7 @@
 
 mod pool;
 
-use migration::MigratorTrait;
+use migration::{tests_cfg::json, MigratorTrait};
 use entity::tasks;
 use entity::tasks::Entity as Tasks;
 use pool::Db;
@@ -10,6 +10,7 @@ use pool::Db;
 use rocket::{
     response::{Responder, Result as ResponseResult},
     fairing::{AdHoc, self},
+    fs::{FileServer, relative},
     serde::json::Json,
     http::Status,
     form::Form,
@@ -19,7 +20,9 @@ use rocket::{
 };
 use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder}; // DeleteResult
 use sea_orm_rocket::{Connection, Database};
+use rocket_dyn_templates::Template;
 
+#[allow(dead_code)]
 struct DatabaseError(sea_orm::DbErr);
 
 impl<'r> Responder<'r, 'r> for DatabaseError {
@@ -36,8 +39,19 @@ impl From<sea_orm::DbErr> for DatabaseError {
 
 
 #[get("/")]
-fn index() -> &'static str {
-    "hello, world!"
+async fn index(conn: Connection<'_, Db>) -> Result<Template, DatabaseError> {
+    let db = conn.into_inner();
+    let tasks = Tasks::find()
+        .order_by_asc(tasks::Column::Id)
+        .all(db)
+        .await?;
+
+    Ok(Template::render(
+        "todo_list",
+        json!({
+            "tasks": tasks
+        })
+    ))
 }
 
 #[post("/addtask", data="<task_form>")]
@@ -98,5 +112,7 @@ fn rocket() -> _ {
     rocket::build()
         .attach(Db::init())
         .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
+        .mount("/", FileServer::from(relative!("/public")))
         .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task])
+        .attach(Template::fairing())
 }
