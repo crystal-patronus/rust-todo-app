@@ -19,7 +19,7 @@ use rocket::{
     Rocket,
     Build
 };
-use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder}; // DeleteResult
+use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, QueryOrder, Set}; // DeleteResult
 use sea_orm_rocket::{Connection, Database};
 use rocket_dyn_templates::Template;
 
@@ -39,19 +39,31 @@ impl From<sea_orm::DbErr> for DatabaseError {
 }
 
 
-#[get("/")]
-async fn index(conn: Connection<'_, Db>, flash: Option<FlashMessage<'_>>) -> Result<Template, DatabaseError> {
+#[get("/?<page>&<tasks_per_page>")]
+async fn index(
+    conn: Connection<'_, Db>,
+    flash: Option<FlashMessage<'_>>,
+    page: Option<usize>,
+    tasks_per_page: Option<usize>
+) -> Result<Template, DatabaseError> {
     let db = conn.into_inner();
-    let tasks = Tasks::find()
+    let page = page.unwrap_or(0);
+    let tasks_per_page = tasks_per_page.unwrap_or(5);
+
+    let paginator = Tasks::find()
         .order_by_asc(tasks::Column::Id)
-        .all(db)
-        .await?;
+        .paginate(db, tasks_per_page);
+    let number_of_pages = paginator.num_pages().await?;
+    let tasks = paginator.fetch_page(page).await?;
 
     Ok(Template::render(
         "todo_list",
         json!({
             "tasks": tasks,
-            "flash": flash.map(FlashMessage::into_inner)
+            "flash": flash.map(FlashMessage::into_inner),
+            "number_of_pages": number_of_pages,
+            "current_page": page,
+            "tasks_per_page": tasks_per_page,
         })
     ))
 }
