@@ -8,7 +8,7 @@ table {
     letter-spacing: 1px;
     font-size: 0.8rem;
     width:100%;
-    margin-bottom: 2rem;
+
 }
 
 td, th {
@@ -84,4 +84,29 @@ input {
 .actions {
     display: flex;
     justify-content: space-around;
+}
+
+label {
+    display: block;
+    letter-spacing: 1px;
+    font-size: 1rem;
+    font-weight: bold;
+    margin-bottom: 0.3rem;
+}
+
+.item-input {
+    margin-bottom: 1.5rem;
+}
+
+.back-button {
+    margin-bottom: 4rem;
+}
+
+.page-row {
+    margin-bottom: 2rem;
+    margin-top: 1rem;
+}
+
+.page-selector {
+    padding: 1rem 1rem;
 }

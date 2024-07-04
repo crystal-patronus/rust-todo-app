@@ -8,7 +8,8 @@ use entity::tasks::Entity as Tasks;
 use pool::Db;
 
 use rocket::{
-    response::{Responder, Result as ResponseResult},
+    request::FlashMessage,
+    response::{Responder, Flash, Redirect, Result as ResponseResult},
     fairing::{AdHoc, self},
     fs::{FileServer, relative},
     serde::json::Json,
@@ -18,7 +19,7 @@ use rocket::{
     Rocket,
     Build
 };
-use sea_orm::{ActiveModelTrait, Set, EntityTrait, QueryOrder}; // DeleteResult
+use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, QueryOrder, Set}; // DeleteResult
 use sea_orm_rocket::{Connection, Database};
 use rocket_dyn_templates::Template;
 
@@ -38,24 +39,37 @@ impl From<sea_orm::DbErr> for DatabaseError {
 }
 
 
-#[get("/")]
-async fn index(conn: Connection<'_, Db>) -> Result<Template, DatabaseError> {
+#[get("/?<page>&<tasks_per_page>")]
+async fn index(
+    conn: Connection<'_, Db>,
+    flash: Option<FlashMessage<'_>>,
+    page: Option<usize>,
+    tasks_per_page: Option<usize>
+) -> Result<Template, DatabaseError> {
     let db = conn.into_inner();
-    let tasks = Tasks::find()
+    let page = page.unwrap_or(0);
+    let tasks_per_page = tasks_per_page.unwrap_or(5);
+
+    let paginator = Tasks::find()
         .order_by_asc(tasks::Column::Id)
-        .all(db)
-        .await?;
+        .paginate(db, tasks_per_page);
+    let number_of_pages = paginator.num_pages().await?;
+    let tasks = paginator.fetch_page(page).await?;
 
     Ok(Template::render(
         "todo_list",
         json!({
-            "tasks": tasks
+            "tasks": tasks,
+            "flash": flash.map(FlashMessage::into_inner),
+            "number_of_pages": number_of_pages,
+            "current_page": page,
+            "tasks_per_page": tasks_per_page,
         })
     ))
 }
 
 #[post("/addtask", data="<task_form>")]
-async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Result<Json<tasks::Model>, DatabaseError> {
+async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Flash<Redirect> {
     let db = conn.into_inner();
     let task = task_form.into_inner();
 
@@ -64,7 +78,14 @@ async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Re
         ..Default::default()
     };
 
-    Ok(Json(active_task.insert(db).await?))
+    match active_task.insert(db).await {
+        Ok(result) => result,
+        Err(_) => {
+            return Flash::error(Redirect::to("/"), "Issue creating the task");
+        }
+    };
+
+    Flash::success(Redirect::to("/"), "Task created!")
 }
 
 #[get("/readtasks")]
@@ -80,25 +101,53 @@ async fn read_tasks(conn: Connection<'_, Db>) -> Result<Json<Vec<tasks::Model>>,
 }
 
 #[put("/edittask", data="<task_form>")]
-async fn edit_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Result<Json<tasks::Model>, DatabaseError> {
+async fn edit_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Flash<Redirect> {
     let db = conn.into_inner();
     let task = task_form.into_inner();
 
-    let task_to_update = Tasks::find_by_id(task.id).one(db).await?;
+    let task_to_update = match Tasks::find_by_id(task.id).one(db).await {
+        Ok(result) => result,
+        Err(_) => {
+            return Flash::error(Redirect::to("/"), "Issue editing the task");
+        }
+    };
     let mut task_to_update:tasks::ActiveModel = task_to_update.unwrap().into();
     task_to_update.item = Set(task.item);
+    match task_to_update.update(db).await {
+        Ok(result) => result,
+        Err(_) => {
+            return Flash::error(Redirect::to("/"), "Issue editing the task");
+        }
+    };
 
-    Ok(Json(
-        task_to_update.update(db).await?
+    Flash::success(Redirect::to("/"), "Task edited successfully!")
+}
+
+#[get("/edit/<id>")]
+async fn edit_task_page(conn: Connection<'_, Db>, id: i32) -> Result<Template, DatabaseError> {
+    let db = conn.into_inner();
+    let task = Tasks::find_by_id(id).one(db).await?.unwrap();
+
+    Ok(Template::render(
+        "edit_task_form",
+        json!({
+            "task": task
+        })
     ))
 }
 
 #[delete("/deletetask/<id>")]
-async fn delete_task(conn: Connection<'_, Db>, id: i32) -> Result<String, DatabaseError> {
+async fn delete_task(conn: Connection<'_, Db>, id: i32) -> Flash<Redirect> {
     let db = conn.into_inner();
-    let result = Tasks::delete_by_id(id).exec(db).await?;
+    let _result = match Tasks::delete_by_id(id).exec(db).await {
+        Ok(value) => value,
+        Err(_) => {
+            return Flash::error(Redirect::to("/"), "Issue deleting the task");
+        }
+    };
 
-    Ok(format!("{} task(s) deleted", result.rows_affected))
+    // Ok(format!("{} task(s) deleted", result.rows_affected))
+    Flash::success(Redirect::to("/"), "Task successfully deleted!")
 }
 
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
@@ -113,6 +162,6 @@ fn rocket() -> _ {
         .attach(Db::init())
         .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
         .mount("/", FileServer::from(relative!("/public")))
-        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task])
+        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task, edit_task_page])
         .attach(Template::fairing())
 }
