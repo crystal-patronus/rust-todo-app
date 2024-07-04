@@ -1,5 +1,10 @@
 {% extends "base" %} {% block content %}
 <h1>Todo List</h1>
+{% if flash %}
+<p class="{{ flash.0 }}-flash">
+    {{ flash.1 }}
+</p>
+{% endif %}
 <table>
     <colgroup>
         <col class="medium">
@@ -17,7 +22,9 @@
         <td class="item">{{ task.item }}</td>
         <td>
             <div class="actions">
-                <button>Edit</button>
+                <form action="/edit/{{ task.id }}" method="get">
+                    <button type="submit">Edit</button>
+                </form>
                 <form action="/deletetask/{{ task.id }}" method="post">
                     <input type="hidden" name="_method" value="delete" />
                     <button type="submit">Delete</button>
