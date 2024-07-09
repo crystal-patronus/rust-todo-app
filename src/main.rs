@@ -1,25 +1,28 @@
 #[macro_use] extern crate rocket;
+extern crate argon2;
 
 mod pool;
 
 use migration::{tests_cfg::json, MigratorTrait};
-use entity::tasks;
+use entity::{tasks, users::{self, USER_PASSWORD_SALT}};
 use entity::tasks::Entity as Tasks;
+use entity::users::Entity as Users;
 use pool::Db;
 
+use argon2::Config;
 use rocket::{
-    request::FlashMessage,
+    request::{Outcome, FromRequest, FlashMessage},
     response::{Responder, Flash, Redirect, Result as ResponseResult},
     fairing::{AdHoc, self},
     fs::{FileServer, relative},
     serde::json::Json,
-    http::Status,
+    http::{CookieJar, Cookie, Status},
     form::Form,
     Request,
     Rocket,
     Build
 };
-use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, QueryOrder, Set}; // DeleteResult
+use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, ColumnTrait, QueryOrder, QueryFilter, Set}; // DeleteResult
 use sea_orm_rocket::{Connection, Database};
 use rocket_dyn_templates::Template;
 
@@ -150,6 +153,132 @@ async fn delete_task(conn: Connection<'_, Db>, id: i32) -> Flash<Redirect> {
     Flash::success(Redirect::to("/"), "Task successfully deleted!")
 }
 
+#[get("/login")]
+async fn login_page(flash: Option<FlashMessage<'_>>) -> Template {
+    Template::render(
+        "login_page",
+        json!({
+            "flash": flash.map(FlashMessage::into_inner)
+        })
+    )
+}
+
+#[get("/signup")]
+async fn signup_page(flash: Option<FlashMessage<'_>>) -> Template {
+    Template::render(
+        "signup_page",
+        json!({
+            "flash": flash.map(FlashMessage::into_inner)
+        })
+    )
+}
+
+#[allow(dead_code)]
+struct AuthenticatedUser {
+    user_id: i32
+}
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for AuthenticatedUser {
+    type Error = anyhow::Error;
+    
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let cookies = req.cookies();
+        let user_id_cookie = match get_user_id_cookie(cookies) {
+            Some(result) => result,
+            None => return Outcome::Forward(Status::BadRequest)
+        };
+
+        let logged_in_user_id = match user_id_cookie.value()
+            .parse::<i32>() {
+                Ok(result) => result,
+                Err(_err) => return Outcome::Forward(Status::BadRequest)
+            };
+
+        return Outcome::Success(AuthenticatedUser {
+            user_id: logged_in_user_id
+        })
+    }
+}
+
+#[post("/createaccount", data="<user_form>")]
+async fn create_account(conn: Connection<'_, Db>, user_form: Form<users::Model>) -> Flash<Redirect> {
+    let db = conn.into_inner();
+    let user = user_form.into_inner();
+
+    let hash_config = Config::default();
+    let hash = match argon2::hash_encoded(user.password.as_bytes(), USER_PASSWORD_SALT, &hash_config) {
+        Ok(result) => result,
+        Err(_) => {
+            return Flash::error(Redirect::to("/signup"), "Issue creating account")
+        }
+    };
+
+    let active_user = users::ActiveModel {
+        username: Set(user.username),
+        password: Set(hash),
+        ..Default::default()
+    };
+
+    match active_user.insert(db).await {
+        Ok(result) => result,
+        Err(_) => {
+            return Flash::error(Redirect::to("/signup"), "Issue creating account");
+        }
+    };
+
+    Flash::success(Redirect::to("/login"), "Account created successfully!")
+}
+
+fn get_user_id_cookie<'a>(cookies: &'a CookieJar) -> Option<Cookie<'a>> {
+    cookies.get_private("user_id")
+}
+
+fn set_user_id_cookie(cookies: & CookieJar, user_id: i32) {
+    cookies.add_private(Cookie::new("user_id", user_id.to_string()));
+}
+
+fn login_error() -> Flash<Redirect> {
+    Flash::error(Redirect::to("/login"), "Incorrect username or password")
+}
+
+#[post("/verifyaccount", data="<user_form>")]
+async fn verify_account(conn: Connection<'_, Db>, cookies: & CookieJar<'_>, user_form: Form<users::Model>) -> Flash<Redirect> {
+    let db = conn.into_inner();
+    let user = user_form.into_inner();
+
+    let stored_user = match Users::find()
+        .filter(users::Column::Username.contains(&user.username))
+        .one(db)
+        .await {
+            Ok(model_or_null) => {
+                match model_or_null {
+                    Some(model) => model,
+                    None => {
+                        return login_error();
+                    }
+                }
+            },
+            Err(_) => {
+                return login_error();
+            }
+        };
+    
+    let is_password_correct = match argon2::verify_encoded(&stored_user.password, user.password.as_bytes()) {
+        Ok(result) => result,
+        Err(_) => {
+            return Flash::error(Redirect::to("/login"), "Encountered an issue processing your account")
+        }
+    };
+
+    if !is_password_correct {
+        return login_error();
+    }
+
+    set_user_id_cookie(cookies, stored_user.id);
+    Flash::success(Redirect::to("/"), "Logged in succesfully!")
+}
+
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
     let conn = &Db::fetch(&rocket).unwrap().conn;
     let _ = migration::Migrator::up(conn, None).await;
@@ -162,6 +291,6 @@ fn rocket() -> _ {
         .attach(Db::init())
         .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
         .mount("/", FileServer::from(relative!("/public")))
-        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task, edit_task_page])
+        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task, edit_task_page, signup_page, login_page, create_account, verify_account])
         .attach(Template::fairing())
 }
