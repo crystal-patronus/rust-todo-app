@@ -47,13 +47,15 @@ async fn index(
     conn: Connection<'_, Db>,
     flash: Option<FlashMessage<'_>>,
     page: Option<usize>,
-    tasks_per_page: Option<usize>
+    tasks_per_page: Option<usize>,
+    user: AuthenticatedUser
 ) -> Result<Template, DatabaseError> {
     let db = conn.into_inner();
     let page = page.unwrap_or(0);
     let tasks_per_page = tasks_per_page.unwrap_or(5);
 
     let paginator = Tasks::find()
+        .filter(tasks::Column::UserId.eq(user.user_id))
         .order_by_asc(tasks::Column::Id)
         .paginate(db, tasks_per_page);
     let number_of_pages = paginator.num_pages().await?;
@@ -71,13 +73,24 @@ async fn index(
     ))
 }
 
+#[allow(unused)]
+#[get("/?<page>&<tasks_per_page>", rank = 2)]
+async fn index_redirect(page: Option<usize>, tasks_per_page: Option<usize>) -> Redirect {
+    redirect_to_login()
+}
+
+fn redirect_to_login() -> Redirect {
+    Redirect::to("/login")
+}
+
 #[post("/addtask", data="<task_form>")]
-async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Flash<Redirect> {
+async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>, user: AuthenticatedUser) -> Flash<Redirect> {
     let db = conn.into_inner();
     let task = task_form.into_inner();
 
     let active_task: tasks::ActiveModel = tasks::ActiveModel {
         item: Set(task.item),
+        user_id: Set(user.user_id),
         ..Default::default()
     };
 
@@ -89,6 +102,11 @@ async fn add_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Fl
     };
 
     Flash::success(Redirect::to("/"), "Task created!")
+}
+
+#[post("/addtask", rank = 2)]
+async fn add_task_redirect() -> Redirect {
+    redirect_to_login()
 }
 
 #[get("/readtasks")]
@@ -104,7 +122,7 @@ async fn read_tasks(conn: Connection<'_, Db>) -> Result<Json<Vec<tasks::Model>>,
 }
 
 #[put("/edittask", data="<task_form>")]
-async fn edit_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> Flash<Redirect> {
+async fn edit_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>, _user: AuthenticatedUser) -> Flash<Redirect> {
     let db = conn.into_inner();
     let task = task_form.into_inner();
 
@@ -126,8 +144,13 @@ async fn edit_task(conn: Connection<'_, Db>, task_form: Form<tasks::Model>) -> F
     Flash::success(Redirect::to("/"), "Task edited successfully!")
 }
 
+#[put("/edittask", rank = 2)]
+async fn edit_task_redirect() -> Redirect {
+    redirect_to_login()
+}
+
 #[get("/edit/<id>")]
-async fn edit_task_page(conn: Connection<'_, Db>, id: i32) -> Result<Template, DatabaseError> {
+async fn edit_task_page(conn: Connection<'_, Db>, id: i32, _user: AuthenticatedUser) -> Result<Template, DatabaseError> {
     let db = conn.into_inner();
     let task = Tasks::find_by_id(id).one(db).await?.unwrap();
 
@@ -139,8 +162,14 @@ async fn edit_task_page(conn: Connection<'_, Db>, id: i32) -> Result<Template, D
     ))
 }
 
+#[allow(unused)]
+#[get("/edit/<id>", rank = 2)]
+async fn edit_task_page_redirect(id: i32) -> Redirect {
+    redirect_to_login()
+}
+
 #[delete("/deletetask/<id>")]
-async fn delete_task(conn: Connection<'_, Db>, id: i32) -> Flash<Redirect> {
+async fn delete_task(conn: Connection<'_, Db>, id: i32, _user: AuthenticatedUser) -> Flash<Redirect> {
     let db = conn.into_inner();
     let _result = match Tasks::delete_by_id(id).exec(db).await {
         Ok(value) => value,
@@ -153,6 +182,12 @@ async fn delete_task(conn: Connection<'_, Db>, id: i32) -> Flash<Redirect> {
     Flash::success(Redirect::to("/"), "Task successfully deleted!")
 }
 
+#[allow(unused)]
+#[delete("/deletetask/<id>", rank = 2)]
+async fn delete_task_redirect(id: i32) -> Redirect {
+    redirect_to_login()
+}
+
 #[get("/login")]
 async fn login_page(flash: Option<FlashMessage<'_>>) -> Template {
     Template::render(
@@ -161,6 +196,12 @@ async fn login_page(flash: Option<FlashMessage<'_>>) -> Template {
             "flash": flash.map(FlashMessage::into_inner)
         })
     )
+}
+
+#[post("/logout")]
+async fn logout(cookies: & CookieJar<'_>) -> Flash<Redirect> {
+    remove_user_id_cookie(cookies);
+    Flash::success(Redirect::to("/login"), "Logged out succesfully!")
 }
 
 #[get("/signup")]
@@ -238,6 +279,10 @@ fn set_user_id_cookie(cookies: & CookieJar, user_id: i32) {
     cookies.add_private(Cookie::new("user_id", user_id.to_string()));
 }
 
+fn remove_user_id_cookie(cookies: & CookieJar) {
+    cookies.remove_private(Cookie::from("user_id"))
+}
+
 fn login_error() -> Flash<Redirect> {
     Flash::error(Redirect::to("/login"), "Incorrect username or password")
 }
@@ -291,6 +336,23 @@ fn rocket() -> _ {
         .attach(Db::init())
         .attach(AdHoc::try_on_ignite("Migrations", run_migrations))
         .mount("/", FileServer::from(relative!("/public")))
-        .mount("/", routes![index, add_task, read_tasks, edit_task, delete_task, edit_task_page, signup_page, login_page, create_account, verify_account])
+        .mount("/", routes![
+            index,
+            index_redirect,
+            add_task,
+            add_task_redirect,
+            read_tasks,
+            edit_task,
+            edit_task_redirect,
+            delete_task,
+            delete_task_redirect,
+            edit_task_page,
+            edit_task_page_redirect,
+            login_page,
+            logout,
+            signup_page,
+            create_account,
+            verify_account]
+        )
         .attach(Template::fairing())
 }
