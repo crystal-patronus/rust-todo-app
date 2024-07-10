@@ -1,4 +1,7 @@
 {% extends "base" %} {% block content %}
+<form action="/logout" method="post">
+    <button type="submit">Log Out</button>
+</form>
 <h1>Todo List</h1>
 {% if flash %}
 <p class="{{ flash.0 }}-flash">
@@ -60,7 +63,12 @@
 <form action="/addtask" method="post">
     <div class="add_task_form">
         <div class="add_task_form">
-            <input type="text" name="item" placeholder="Enter a new task here..." />
+            <input
+                type="text"
+                name="item"
+                style="width: auto; margin-right: 1rem;"
+                placeholder="Enter a new task here..."
+            />
             <button type="submit">Add Task</button>
         </div>
     </div>

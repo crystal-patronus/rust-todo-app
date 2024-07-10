@@ -9,14 +9,30 @@ pub struct Model {
     #[field(default = 0)]
     pub id: i32,
     pub item: String,
+    #[field(default = 0)]
+    pub user_id: i32
 }
 
 #[derive(Copy, Clone, Debug, EnumIter)]
-pub enum Relation {}
+pub enum Relation {
+    Users
+}
 
 impl RelationTrait for Relation {
     fn def(&self) -> RelationDef {
-        panic!("No RelationDef")
+        // panic!("No RelationDef")
+        match self {
+            Self::Users => Entity::belongs_to(super::users::Entity)
+                .from(Column::UserId)
+                .to(super::users::Column::Id)
+                .into(),
+        }
+    }
+}
+
+impl Related<super::users::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Users.def()
     }
 }
 
